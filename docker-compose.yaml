@@ -1,0 +1,172 @@
+# Pasadonia — customer deployment stack
+#
+# Pin a version with the VERSION variable (recommended for production):
+#   VERSION=X.Y.Z docker compose up -d
+# Omitting it defaults to the latest published release (:latest).
+services:
+  frontend:
+    image: tachyondev/pasadonia-ui:${VERSION:-latest}
+    ports:
+      - "3000:3000"
+    depends_on:
+      app:
+        condition: service_started
+    networks:
+      - app-network
+
+  app:
+    image: tachyondev/pasadonia-backend:${VERSION:-latest}
+    command: ["/app/bin/start-all-services.sh"]
+    ports:
+      - "9001:9001"  # App Service
+      - "9002:9002"  # Main Service
+      - "9005:9005"  # Job Service
+      - "9006:9006"  # WS node Service
+      - "9007:9007"  # WebSocket server
+      - "9008:9008"  # Alerts Service
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+        restart: true
+      supertokens:
+        condition: service_healthy
+        restart: true
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - BACKUP_DIR=/app/backups       # pkg-compatible path
+      - CAPTURES_DIR=/app/captures    # pkg-compatible path
+    networks:
+      - app-network
+    extra_hosts:
+      - "pasadonia.local.com:127.0.0.1"
+    volumes:
+      - ./backups:/app/backups
+      - captures-data:/app/captures
+
+  worker:
+    image: tachyondev/pasadonia-worker-node:${VERSION:-latest}
+    cap_add:
+      - NET_RAW       # required for nmap SYN scans / packet capture
+      - NET_ADMIN
+    depends_on:
+      app:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - WS_URL=ws://app:9007
+    networks:
+      - app-network
+    volumes:
+      - /app/data
+    deploy:
+      replicas: 1
+
+  mongo:
+    image: mongo:4.4
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - app-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongo mongo:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  db:
+    image: 'postgres:17'
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+    ports:
+      - 5433:${POSTGRES_PORT}
+    networks:
+      - app-network
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'supertokens_user', '-d', 'supertokens']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  supertokens:
+    image: registry.supertokens.io/supertokens/supertokens-postgresql
+    environment:
+      POSTGRESQL_HOST: ${POSTGRES_HOST}
+      POSTGRESQL_PORT: ${POSTGRES_PORT}
+      POSTGRESQL_USER: ${POSTGRES_USER}
+      POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRESQL_DATABASE_NAME: ${POSTGRES_DB}
+      REFRESH_TOKEN_VALIDITY: 720    # 12 hours in minutes
+      ACCESS_TOKEN_VALIDITY: 3600    # 1 hour in seconds
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+    ports:
+      - 3567:3567
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: >
+        bash -c 'exec 3<>/dev/tcp/127.0.0.1/3567 && echo -e "GET /hello HTTP/1.1\r\nhost: 127.0.0.1:3567\r\nConnection: close\r\n\r\n" >&3 && cat <&3 | grep "Hello"'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:4.0-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 10s
+      timeout: 20s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  mongo-data:
+  postgres_data:
+  redis-data:
+  captures-data:

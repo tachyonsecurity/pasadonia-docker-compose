@@ -1,0 +1,8 @@
+# Never commit a filled-in environment file — it holds secrets
+.env
+.env.*
+!example.env
+
+# Local runtime data
+backups/
+*.log
