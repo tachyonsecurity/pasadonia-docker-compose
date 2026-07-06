@@ -6,6 +6,7 @@
 services:
   frontend:
     image: tachyondev/pasadonia-ui:${VERSION:-latest}
+    restart: unless-stopped
     ports:
       - "3000:3000"
     depends_on:
@@ -16,6 +17,7 @@ services:
 
   app:
     image: tachyondev/pasadonia-backend:${VERSION:-latest}
+    restart: unless-stopped
     command: ["/app/bin/start-all-services.sh"]
     ports:
       - "9001:9001"  # App Service
@@ -53,6 +55,7 @@ services:
 
   worker:
     image: tachyondev/pasadonia-worker-node:${VERSION:-latest}
+    restart: unless-stopped
     cap_add:
       - NET_RAW       # required for nmap SYN scans / packet capture
       - NET_ADMIN
@@ -67,11 +70,21 @@ services:
       - app-network
     volumes:
       - /app/data
+      # Host's stable machine-id -> reliable host fingerprint for worker
+      # scaling telemetry (network-agent#131). Read-only. Without it the
+      # worker derives a fingerprint from boot time, which can collide on
+      # cloned VMs. Edge: on a host that lacks the file (rare - any
+      # systemd/dbus distro has it), Docker creates an empty DIRECTORY at
+      # /etc/machine-id on the host; the worker detects it and falls back
+      # to the derived fingerprint - nothing breaks, but the stray dir is
+      # a host-side side effect to be aware of.
+      - /etc/machine-id:/etc/host-machine-id:ro
     deploy:
       replicas: 1
 
   mongo:
     image: mongo:4.4
+    restart: unless-stopped
     ports:
       - "27018:27017"
     volumes:
