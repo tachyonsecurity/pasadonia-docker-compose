@@ -1,0 +1,52 @@
+name: Release
+
+# Clean semver tags only (X.Y.Z) — alpha/beta/rc tags belong to the
+# internal repos; this repo versions the customer deployment stack.
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Render versioned compose file
+        # Pin the release version into the image tags. Only the VERSION
+        # default is substituted; ${POSTGRES_*} stay as runtime variables
+        # resolved from the customer's .env (envsubst can't do this: it
+        # ignores ${VAR:-default} syntax and would blank the rest).
+        run: |
+          sed 's/${VERSION:-latest}/${{ github.ref_name }}/g' \
+            docker-compose.yaml > docker-compose-${{ github.ref_name }}.yml
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: docker-compose-${{ github.ref_name }}.yml
+          generate_release_notes: false
+          body: |
+            ## Pasadonia ${{ github.ref_name }}
+
+            ### Docker images
+            | Image | Tag |
+            |-------|-----|
+            | `tachyondev/pasadonia-ui` | `${{ github.ref_name }}` |
+            | `tachyondev/pasadonia-backend` | `${{ github.ref_name }}` |
+            | `tachyondev/pasadonia-worker-node` | `${{ github.ref_name }}` |
+
+            ### Quick start
+            ```bash
+            # Option 1: Use VERSION variable
+            VERSION=${{ github.ref_name }} docker compose up -d
+
+            # Option 2: Use the rendered compose file from this release
+            docker compose -f docker-compose-${{ github.ref_name }}.yml up -d
+            ```
+
+            See the attached `docker-compose-${{ github.ref_name }}.yml` for the full configuration.
