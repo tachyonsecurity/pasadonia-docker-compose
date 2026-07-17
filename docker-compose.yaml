@@ -83,7 +83,10 @@ services:
       replicas: 1
 
   mongo:
-    image: mongo:4.4
+    # 5.0+ required since 0.2.12: device-health metrics use time-series
+    # collections. Upgrading an existing 4.4 volume is supported (4.4 -> 5.0
+    # is a direct upgrade path; the app migrates FCV on startup).
+    image: mongo:5.0
     restart: unless-stopped
     ports:
       - "27018:27017"
